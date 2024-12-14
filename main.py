@@ -3,237 +3,335 @@ import uuid
 import csv
 import random
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import List, Dict
-from collections import defaultdict
+
+# Enums for different types and states
+
+
+class TyreType(Enum):
+    RESILIENT_SOFT_BOND = "Resilient-SoftBond"
+    RESILIENT_BASIC = "Resilient-Basic"
+    PRESS_ON = "Press-On"
+
+
+class Size(Enum):
+    SMALL = "Small"
+    MEDIUM = "Medium"
+    LARGE = "Large"
+
+
+class TemperatureRange(Enum):
+    OPTIMAL = "Optimal"
+    ACCEPTABLE = "Acceptable"
+    MINIMUM = "Minimum"
 
 
 @dataclass
-class Order:
+class TyreOrder:
     pid: str
-    tyre_type: str
+    tyre_type: TyreType
     brand: str
     tread_pattern: str
-    size: str
+    size: Size
     quantity: int
-
-
-@dataclass
-class ProcessTime:
-    wait_time: float
-    process_time: float
 
 
 @dataclass
 class Tyre:
     serial_number: str
-    pid: str
-    tyre_type: str
-    start_time: float = 0
-    end_time: float = 0
-    process_times: Dict[str, ProcessTime] = None
-
-    def __post_init__(self):
-        if self.process_times is None:
-            self.process_times = {}
+    order: TyreOrder
 
 
 class TyreFactory:
     def __init__(self, env: simpy.Environment):
         self.env = env
-        # Initialize resources
-        self.building_stations = {
-            'wrap_inner_heal': simpy.Resource(env, capacity=1),
-            'apply_bead': simpy.Resource(env, capacity=1),
-            'wrap_heal': simpy.Resource(env, capacity=1),
-            'wrap_bond': simpy.Resource(env, capacity=2),
-            'wrap_soft': simpy.Resource(env, capacity=1),
-            'wrap_tread': simpy.Resource(env, capacity=1),
-            'press': simpy.Resource(env, capacity=1)
-        }
+
+        # Building stations (capacity=1 for each)
+        self.wrap_inner_heal = simpy.Resource(env, capacity=1)
+        self.apply_bead = simpy.Resource(env, capacity=1)
+        self.wrap_heal = simpy.Resource(env, capacity=1)
+        self.resilient_bond_wrap = simpy.Resource(env, capacity=1)
+        self.press_on_bond_wrap = simpy.Resource(env, capacity=1)
+        self.wrap_soft = simpy.Resource(env, capacity=1)
+        self.wrap_tread = simpy.Resource(env, capacity=1)
+        self.press = simpy.Resource(env, capacity=1)
+
+        # Curing ovens (capacity=12)
         self.curing_ovens = simpy.Resource(env, capacity=12)
 
-        # Statistics
+        # Production tracking
         self.completed_tyres: List[Tyre] = []
-        self.station_wait_times = defaultdict(list)
-        self.station_process_times = defaultdict(list)
-        self.station_queue_lengths = defaultdict(list)
 
-    def generate_serial_number(self) -> str:
-        return str(uuid.uuid4())
+    def get_temperature_range(self) -> TemperatureRange:
+        """Simulate temperature measurement and return the range."""
+        rand = random.random()
+        if rand < 0.6:  # 60% chance of optimal
+            return TemperatureRange.OPTIMAL
+        elif rand < 0.9:  # 30% chance of acceptable
+            return TemperatureRange.ACCEPTABLE
+        else:  # 10% chance of minimum
+            return TemperatureRange.MINIMUM
 
-    def get_building_time(self, step: str) -> float:
-        return random.uniform(40, 50) / 60
+    def get_base_curing_time(self, tyre: Tyre) -> int:
+        """Get base curing time in minutes based on tyre type."""
+        if tyre.order.tyre_type == TyreType.RESILIENT_SOFT_BOND:
+            return 120
+        elif tyre.order.tyre_type == TyreType.RESILIENT_BASIC:
+            return 100
+        else:  # Press-On
+            return 90
 
-    def get_curing_temperature(self, tyre_type: str) -> float:
-        if tyre_type == 'Resilient':
-            heal_temp = random.uniform(70, 100)
-            soft_temp = random.uniform(80, 110)
-            return min(heal_temp, soft_temp)
-        else:
-            return random.uniform(80, 110)
+    def get_size_adjustment(self, size: Size) -> int:
+        """Get additional curing time based on size."""
+        if size == Size.MEDIUM:
+            return 15
+        elif size == Size.LARGE:
+            return 30
+        return 0
 
-    def calculate_curing_time(self, temperature: float) -> float:
-        base_time = 40
-        temp_difference = 110 - temperature
-        additional_time = (temp_difference // 10) * 10
-        return base_time + additional_time
+    def get_temperature_adjustment(self, temp_range: TemperatureRange) -> int:
+        """Get additional curing time based on temperature range."""
+        if temp_range == TemperatureRange.ACCEPTABLE:
+            return 20
+        elif temp_range == TemperatureRange.MINIMUM:
+            return 40
+        return 0
 
-    def record_station_metrics(self, station: str, wait_time: float, process_time: float):
-        self.station_wait_times[station].append(wait_time)
-        self.station_process_times[station].append(process_time)
-        queue_length = len(self.building_stations[station].queue) if station != 'curing' else len(
-            self.curing_ovens.queue)
-        self.station_queue_lengths[station].append(queue_length)
+    def wrap_inner_heal_process(self, tyre: Tyre):
+        """Simulate wrap inner heal process."""
+        process_time = random.uniform(40, 50)  # 40-50 seconds
+        yield self.env.timeout(process_time)
 
-    def build_resilient_tyre(self, tyre: Tyre):
-        building_steps = [
-            'wrap_inner_heal', 'apply_bead', 'wrap_heal',
-            'wrap_bond', 'wrap_soft', 'wrap_tread', 'press'
-        ]
+    def apply_bead_process(self, tyre: Tyre):
+        """Simulate bead application process."""
+        process_time = random.uniform(45, 55)  # 45-55 seconds
+        yield self.env.timeout(process_time)
 
-        for step in building_steps:
-            arrival_time = self.env.now
-            with self.building_stations[step].request() as req:
-                yield req
-                wait_time = self.env.now - arrival_time
+    def wrap_heal_process(self, tyre: Tyre):
+        """Simulate heal wrapping process."""
+        process_time = random.uniform(45, 55)
+        yield self.env.timeout(process_time)
 
-                process_start = self.env.now
-                yield self.env.timeout(self.get_building_time(step))
-                process_time = self.env.now - process_start
+    def wrap_bond_process(self, tyre: Tyre):
+        """Simulate bond wrapping process."""
+        process_time = random.uniform(45, 55)
+        yield self.env.timeout(process_time)
 
-                tyre.process_times[step] = ProcessTime(wait_time, process_time)
-                self.record_station_metrics(step, wait_time, process_time)
-                print(f"{self.env.now:.2f}: {tyre.serial_number} completed {
-                      step} (Wait: {wait_time:.2f}, Process: {process_time:.2f})")
+    def wrap_soft_process(self, tyre: Tyre):
+        """Simulate soft wrapping process."""
+        process_time = random.uniform(45, 55)
+        yield self.env.timeout(process_time)
 
-    def build_press_on_tyre(self, tyre: Tyre):
-        building_steps = ['wrap_bond', 'wrap_soft', 'wrap_tread', 'press']
+    def wrap_tread_process(self, tyre: Tyre):
+        """Simulate tread wrapping process."""
+        process_time = random.uniform(45, 55)
+        yield self.env.timeout(process_time)
 
-        for step in building_steps:
-            arrival_time = self.env.now
-            with self.building_stations[step].request() as req:
-                yield req
-                wait_time = self.env.now - arrival_time
+    def press_process(self, tyre: Tyre):
+        """Simulate pressing process."""
+        process_time = random.uniform(120, 300)  # 2-5 minutes in seconds
+        yield self.env.timeout(process_time)
 
-                process_start = self.env.now
-                yield self.env.timeout(self.get_building_time(step))
-                process_time = self.env.now - process_start
+    def curing_process(self, tyre: Tyre):
+        """Simulate curing process."""
+        temp_range = self.get_temperature_range()
 
-                tyre.process_times[step] = ProcessTime(wait_time, process_time)
-                self.record_station_metrics(step, wait_time, process_time)
-                print(f"{self.env.now:.2f}: {tyre.serial_number} completed {
-                      step} (Wait: {wait_time:.2f}, Process: {process_time:.2f})")
+        # Calculate total curing time
+        base_time = self.get_base_curing_time(tyre)
+        size_adj = self.get_size_adjustment(tyre.order.size)
+        temp_adj = self.get_temperature_adjustment(temp_range)
 
-    def cure_tyre(self, tyre: Tyre):
-        arrival_time = self.env.now
+        total_time = (base_time + size_adj + temp_adj) * \
+            60  # Convert to seconds
+        yield self.env.timeout(total_time)
+
+    def manufacture_resilient_soft_bond(self, tyre: Tyre):
+        """Manufacturing process for Resilient tyres with soft & bond."""
+        # Wrap Inner Heal
+        with self.wrap_inner_heal.request() as req:
+            yield req
+            yield self.env.process(self.wrap_inner_heal_process(tyre))
+
+        # Apply Bead
+        with self.apply_bead.request() as req:
+            yield req
+            yield self.env.process(self.apply_bead_process(tyre))
+
+        # Wrap Heal
+        with self.wrap_heal.request() as req:
+            yield req
+            yield self.env.process(self.wrap_heal_process(tyre))
+
+        # Wrap Resilient Bond
+        with self.resilient_bond_wrap.request() as req:
+            yield req
+            yield self.env.process(self.wrap_bond_process(tyre))
+
+        # Wrap Soft
+        with self.wrap_soft.request() as req:
+            yield req
+            yield self.env.process(self.wrap_soft_process(tyre))
+
+        # Wrap Tread
+        with self.wrap_tread.request() as req:
+            yield req
+            yield self.env.process(self.wrap_tread_process(tyre))
+
+        # Press
+        with self.press.request() as req:
+            yield req
+            yield self.env.process(self.press_process(tyre))
+
+        # Curing
         with self.curing_ovens.request() as req:
             yield req
-            wait_time = self.env.now - arrival_time
+            yield self.env.process(self.curing_process(tyre))
 
-            process_start = self.env.now
-            temperature = self.get_curing_temperature(tyre.tyre_type)
-            curing_time = self.calculate_curing_time(temperature)
-            print(f"{self.env.now:.2f}: {
-                  tyre.serial_number} starting cure at {temperature:.1f}°C")
-            yield self.env.timeout(curing_time)
-            process_time = self.env.now - process_start
+        self.completed_tyres.append(tyre)
 
-            tyre.process_times['curing'] = ProcessTime(wait_time, process_time)
-            self.record_station_metrics('curing', wait_time, process_time)
-            print(f"{self.env.now:.2f}: {tyre.serial_number} completed curing (Wait: {
-                  wait_time:.2f}, Process: {process_time:.2f})")
+    def manufacture_resilient_basic(self, tyre: Tyre):
+        """Manufacturing process for Resilient tyres without soft & bond."""
+        # Wrap Inner Heal
+        with self.wrap_inner_heal.request() as req:
+            yield req
+            yield self.env.process(self.wrap_inner_heal_process(tyre))
 
-    def manufacture_tyre(self, order: Order):
-        for _ in range(order.quantity):
-            tyre = Tyre(
-                serial_number=self.generate_serial_number(),
-                pid=order.pid,
-                tyre_type=order.tyre_type,
-                start_time=self.env.now
-            )
+        # Apply Bead
+        with self.apply_bead.request() as req:
+            yield req
+            yield self.env.process(self.apply_bead_process(tyre))
 
-            if order.tyre_type == 'Resilient':
-                yield from self.build_resilient_tyre(tyre)
-            else:
-                yield from self.build_press_on_tyre(tyre)
+        # Wrap Heal
+        with self.wrap_heal.request() as req:
+            yield req
+            yield self.env.process(self.wrap_heal_process(tyre))
 
-            yield from self.cure_tyre(tyre)
+        # Wrap Tread
+        with self.wrap_tread.request() as req:
+            yield req
+            yield self.env.process(self.wrap_tread_process(tyre))
 
-            tyre.end_time = self.env.now
-            self.completed_tyres.append(tyre)
-            print(f"{self.env.now:.2f}: {
-                  tyre.serial_number} completed manufacturing")
+        # Press
+        with self.press.request() as req:
+            yield req
+            yield self.env.process(self.press_process(tyre))
 
-    def generate_insights(self):
-        print("\n=== Manufacturing Process Insights ===")
+        # Curing
+        with self.curing_ovens.request() as req:
+            yield req
+            yield self.env.process(self.curing_process(tyre))
 
-        print("\nStation Wait Times (minutes):")
-        for station, times in self.station_wait_times.items():
-            avg_wait = sum(times) / len(times) if times else 0
-            max_wait = max(times) if times else 0
-            print(f"{station:15} Avg: {avg_wait:6.2f}  Max: {max_wait:6.2f}")
+        self.completed_tyres.append(tyre)
 
-        print("\nStation Process Times (minutes):")
-        for station, times in self.station_process_times.items():
-            avg_process = sum(times) / len(times) if times else 0
-            max_process = max(times) if times else 0
-            print(f"{station:15} Avg: {
-                  avg_process:6.2f}  Max: {max_process:6.2f}")
+    def manufacture_press_on(self, tyre: Tyre):
+        """Manufacturing process for Press-On tyres."""
+        # Wrap Press-On Bond
+        with self.press_on_bond_wrap.request() as req:
+            yield req
+            yield self.env.process(self.wrap_bond_process(tyre))
 
-        print("\nStation Queue Lengths:")
-        for station, lengths in self.station_queue_lengths.items():
-            avg_queue = sum(lengths) / len(lengths) if lengths else 0
-            max_queue = max(lengths) if lengths else 0
-            print(f"{station:15} Avg: {avg_queue:6.2f}  Max: {max_queue:6.2f}")
+        # Wrap Soft
+        with self.wrap_soft.request() as req:
+            yield req
+            yield self.env.process(self.wrap_soft_process(tyre))
 
-        print("\nBottleneck Analysis:")
-        avg_wait_times = {station: sum(times)/len(times) if times else 0
-                          for station, times in self.station_wait_times.items()}
-        bottleneck_station = max(avg_wait_times.items(), key=lambda x: x[1])[0]
-        print(f"Primary bottleneck: {bottleneck_station} (Avg wait: {
-              avg_wait_times[bottleneck_station]:.2f} minutes)")
+        # Wrap Tread
+        with self.wrap_tread.request() as req:
+            yield req
+            yield self.env.process(self.wrap_tread_process(tyre))
+
+        # Press
+        with self.press.request() as req:
+            yield req
+            yield self.env.process(self.press_process(tyre))
+
+        # Curing
+        with self.curing_ovens.request() as req:
+            yield req
+            yield self.env.process(self.curing_process(tyre))
+
+        self.completed_tyres.append(tyre)
 
 
-def load_orders(filename: str) -> List[Order]:
+def load_orders(filename: str) -> List[TyreOrder]:
+    """Load orders from CSV file."""
     orders = []
-    with open(filename, 'r') as file:
-        reader = csv.DictReader(file)
+    with open(filename, 'r') as f:
+        reader = csv.DictReader(f)
         for row in reader:
-            orders.append(Order(
+            order = TyreOrder(
                 pid=row['PID'],
-                tyre_type=row['TyreType'],
                 brand=row['Brand'],
+                tyre_type=TyreType(row['TyreType']),
                 tread_pattern=row['TreadPattern'],
-                size=row['Size'],
+                size=Size(row['Size']),
                 quantity=int(row['Quantity'])
-            ))
+            )
+            orders.append(order)
     return orders
 
 
-def run_simulation(orders: List[Order], sim_time: float = 480):
+def order_generator(env: simpy.Environment, factory: TyreFactory, orders: List[TyreOrder]):
+    """Generate tyre manufacturing processes based on orders."""
+    for order in orders:
+        for _ in range(order.quantity):
+            tyre = Tyre(
+                serial_number=str(uuid.uuid4()),
+                order=order
+            )
+
+            if order.tyre_type == TyreType.RESILIENT_SOFT_BOND:
+                env.process(factory.manufacture_resilient_soft_bond(tyre))
+            elif order.tyre_type == TyreType.RESILIENT_BASIC:
+                env.process(factory.manufacture_resilient_basic(tyre))
+            else:  # Press-On
+                env.process(factory.manufacture_press_on(tyre))
+
+            # Small delay between starting each tyre
+            yield env.timeout(random.uniform(30, 60))
+
+
+def run_simulation(orders_file: str, simulation_duration: int = 86400/3):
+    """Run the factory simulation for the specified duration (default 24 hours)."""
+    # Create SimPy environment
     env = simpy.Environment()
+
+    # Create factory
     factory = TyreFactory(env)
 
-    for order in orders:
-        env.process(factory.manufacture_tyre(order))
+    # Load orders
+    orders = load_orders(orders_file)
 
-    env.run(until=sim_time)
+    # Start order generator
+    env.process(order_generator(env, factory, orders))
 
-    print("\nSimulation Results:")
-    print(f"Total tyres completed: {len(factory.completed_tyres)}")
-
-    total_time = sum(
-        tyre.end_time - tyre.start_time for tyre in factory.completed_tyres)
-    avg_time = total_time / \
-        len(factory.completed_tyres) if factory.completed_tyres else 0
-    print(f"Average manufacturing time: {avg_time:.2f} minutes")
-
-    # Generate detailed insights
-    factory.generate_insights()
+    # Run simulation
+    env.run(until=simulation_duration)
 
     return factory.completed_tyres
 
 
 if __name__ == "__main__":
-    orders = load_orders("order.csv")
-    completed_tyres = run_simulation(orders)
+    # Run simulation for 24 hours
+    completed_tyres = run_simulation("orders.csv")
+
+    # Print results
+    print(f"Total tyres completed: {len(completed_tyres)}")
+
+    # Group completed tyres by type
+    type_counts = {}
+    for tyre in completed_tyres:
+        tyre_type = tyre.order.tyre_type.value
+        type_counts[tyre_type] = type_counts.get(tyre_type, 0) + 1
+
+    print("\nCompleted tyres by type:")
+    for tyre_type, count in type_counts.items():
+        print(f"{tyre_type}: {count}")
+
+
+# Crack the PID
+# All tyre types
+# Planning Cards
+# Curing Times
+# Temperature

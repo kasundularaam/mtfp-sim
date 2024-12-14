@@ -1,0 +1,4 @@
+PID,TyreType,Brand,TreadPattern,Size,Quantity
+101.201.301.401,Resilient-SoftBond,BrandA,Pattern1,Small,60
+103.202.302.402,Resilient-Basic,BrandB,Pattern2,Medium,30
+102.203.303.403,Press-On,BrandC,Pattern3,Large,80
